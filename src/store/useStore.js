@@ -132,13 +132,28 @@ export const useStore = create(
       importData: (jsonStr) => {
         try {
           const parsed = JSON.parse(jsonStr);
+          // Support both flat format and raw Zustand storage format
+          const targetState = parsed.state ? parsed.state : parsed;
+          
+          const completed = targetState.completedQuestions || [];
+          const revision = targetState.revisionQuestions || [];
+          const notesRaw = targetState.notes || {};
+          
+          let notesMap;
+          if (Array.isArray(notesRaw)) {
+            notesMap = new Map(notesRaw);
+          } else {
+            notesMap = new Map(Object.entries(notesRaw));
+          }
+
           set({
-            completedQuestions: new Set(parsed.completedQuestions || []),
-            revisionQuestions: new Set(parsed.revisionQuestions || []),
-            notes: new Map(Object.entries(parsed.notes || {})),
-            theme: parsed.theme || 'dark',
+            completedQuestions: new Set(completed),
+            revisionQuestions: new Set(revision),
+            notes: notesMap,
+            theme: targetState.theme || 'dark',
           });
-          const loadedTheme = parsed.theme || 'dark';
+
+          const loadedTheme = targetState.theme || 'dark';
           if (loadedTheme === 'dark') {
             document.documentElement.classList.add('dark');
           } else {
