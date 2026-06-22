@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Bold, Italic, Underline, List } from 'lucide-react';
+import { X, Bold, Italic, Underline, List, Image } from 'lucide-react';
 
 export default function NotesModal({ isOpen, onClose, onSave, initialNote = '', questionTitle }) {
   const [isEmpty, setIsEmpty] = useState(!initialNote);
   const editorRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   useEffect(() => {
     setIsEmpty(!initialNote);
@@ -27,7 +28,80 @@ export default function NotesModal({ isOpen, onClose, onSave, initialNote = '', 
   const checkEmpty = () => {
     if (editorRef.current) {
       const text = editorRef.current.textContent || '';
-      setIsEmpty(text.trim() === '');
+      // Also check if there are any images in the editor
+      const hasImages = editorRef.current.getElementsByTagName('img').length > 0;
+      setIsEmpty(text.trim() === '' && !hasImages);
+    }
+  };
+
+  const insertImage = (dataUrl) => {
+    if (editorRef.current) {
+      editorRef.current.focus();
+      const selection = window.getSelection();
+      let inserted = false;
+
+      if (selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        // Ensure the cursor/selection is actually inside our editor
+        if (editorRef.current.contains(range.commonAncestorContainer)) {
+          range.deleteContents();
+          
+          const img = document.createElement('img');
+          img.src = dataUrl;
+          img.className = 'my-3 max-w-full rounded-lg shadow-md border border-gray-200 dark:border-zinc-800 block';
+          img.style.maxWidth = '100%';
+          img.style.height = 'auto';
+          
+          range.insertNode(img);
+          
+          // Move cursor right after the image
+          const nextRange = document.createRange();
+          nextRange.setStartAfter(img);
+          nextRange.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(nextRange);
+          inserted = true;
+        }
+      }
+
+      // If no valid selection or cursor inside editor, append to the end
+      if (!inserted) {
+        const imgHtml = `<img src="${dataUrl}" class="my-3 max-w-full rounded-lg shadow-md border border-gray-200 dark:border-zinc-800 block" style="max-width: 100%; height: auto;" />`;
+        editorRef.current.innerHTML += imgHtml;
+      }
+      
+      checkEmpty();
+    }
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      insertImage(event.target.result);
+    };
+    reader.readAsDataURL(file);
+    // Reset file value
+    e.target.value = '';
+  };
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        e.preventDefault(); // Stop standard text paste
+        const file = items[i].getAsFile();
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          insertImage(event.target.result);
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
     }
   };
 
@@ -93,7 +167,9 @@ export default function NotesModal({ isOpen, onClose, onSave, initialNote = '', 
           >
             <Underline className="w-4 h-4" />
           </button>
+          
           <div className="w-px h-6 bg-gray-200 dark:bg-zinc-800 mx-1" />
+          
           <button
             onMouseDown={(e) => handleCommand(e, 'insertUnorderedList')}
             className="p-1.5 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded text-gray-700 dark:text-zinc-300 transition-colors"
@@ -101,6 +177,27 @@ export default function NotesModal({ isOpen, onClose, onSave, initialNote = '', 
           >
             <List className="w-4 h-4" />
           </button>
+          
+          <div className="w-px h-6 bg-gray-200 dark:bg-zinc-800 mx-1" />
+
+          {/* Insert Image Button */}
+          <button
+            onMouseDown={(e) => {
+              e.preventDefault();
+              imageInputRef.current?.click();
+            }}
+            className="p-1.5 hover:bg-gray-200 dark:hover:bg-zinc-800 rounded text-gray-700 dark:text-zinc-300 transition-colors"
+            title="Insert Image"
+          >
+            <Image className="w-4 h-4" />
+          </button>
+          <input
+            type="file"
+            ref={imageInputRef}
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="hidden"
+          />
         </div>
 
         {/* Editor Body */}
@@ -114,6 +211,7 @@ export default function NotesModal({ isOpen, onClose, onSave, initialNote = '', 
             ref={editorRef}
             contentEditable
             onInput={checkEmpty}
+            onPaste={handlePaste}
             className="w-full h-full min-h-[250px] outline-none text-gray-800 dark:text-zinc-200 focus:ring-0 leading-relaxed font-primary"
           />
         </div>
