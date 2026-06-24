@@ -33,6 +33,9 @@ const customStorage = {
       localStorage.setItem(name, JSON.stringify(stateToSave));
     } catch (e) {
       console.error('Error saving state to localStorage:', e);
+      if (e.name === 'QuotaExceededError' || e.code === 22 || e.number === 0x8007000E) {
+        alert("⚠️ Local Storage is Full! The note could not be saved because the images or content exceed the browser's storage limit. We have added image compression to help prevent this, but please try using smaller images.");
+      }
     }
   },
   removeItem: (name) => localStorage.removeItem(name),
