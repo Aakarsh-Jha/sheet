@@ -1,44 +1,165 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-// Custom storage to serialize/deserialize ES6 Set and Map types
+// Check if IndexedDB is available and working
+let useIndexedDB = true;
+try {
+  if (!window.indexedDB) {
+    useIndexedDB = false;
+  }
+} catch (e) {
+  useIndexedDB = false;
+}
+
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("IndexedDB not supported"));
+      return;
+    }
+    const request = indexedDB.open('dsa-tracker-db', 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('store')) {
+        db.createObjectStore('store');
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+};
+
+const parseState = (raw) => {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.state) {
+      parsed.state.completedQuestions = new Set(parsed.state.completedQuestions || []);
+      parsed.state.revisionQuestions = new Set(parsed.state.revisionQuestions || []);
+      parsed.state.notes = new Map(Object.entries(parsed.state.notes || {}));
+    }
+    return parsed;
+  } catch (e) {
+    console.error("Failed to parse state", e);
+    return null;
+  }
+};
+
+const serializeState = (value) => {
+  const stateToSave = { ...value };
+  if (stateToSave.state) {
+    stateToSave.state = {
+      ...stateToSave.state,
+      completedQuestions: Array.from(stateToSave.state.completedQuestions),
+      revisionQuestions: Array.from(stateToSave.state.revisionQuestions),
+      notes: Object.fromEntries(stateToSave.state.notes),
+    };
+  }
+  return JSON.stringify(stateToSave);
+};
+
+const showQuotaAlert = (e) => {
+  if (e.name === 'QuotaExceededError' || e.code === 22 || e.number === 0x8007000E) {
+    alert("⚠️ Local Storage is Full! The note could not be saved because your browser's storage limit was exceeded. Try clearing some notes or using smaller images.");
+  }
+};
+
 const customStorage = {
-  getItem: (name) => {
-    const raw = localStorage.getItem(name);
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.state) {
-        parsed.state.completedQuestions = new Set(parsed.state.completedQuestions || []);
-        parsed.state.revisionQuestions = new Set(parsed.state.revisionQuestions || []);
-        parsed.state.notes = new Map(Object.entries(parsed.state.notes || {}));
-      }
-      return parsed;
-    } catch (e) {
-      console.error('Error parsing state from localStorage:', e);
-      return null;
+  getItem: async (name) => {
+    if (!useIndexedDB) {
+      const raw = localStorage.getItem(name);
+      if (!raw) return null;
+      return parseState(raw);
     }
-  },
-  setItem: (name, value) => {
+
     try {
-      const stateToSave = { ...value };
-      if (stateToSave.state) {
-        stateToSave.state = {
-          ...stateToSave.state,
-          completedQuestions: Array.from(stateToSave.state.completedQuestions),
-          revisionQuestions: Array.from(stateToSave.state.revisionQuestions),
-          notes: Object.fromEntries(stateToSave.state.notes),
+      const db = await openDB();
+      return new Promise((resolve) => {
+        const tx = db.transaction('store', 'readonly');
+        const store = tx.objectStore('store');
+        const request = store.get(name);
+        request.onsuccess = async () => {
+          let raw = request.result;
+          if (!raw) {
+            // Migrate from legacy localStorage
+            const legacyRaw = localStorage.getItem(name);
+            if (legacyRaw) {
+              console.log("Migrating legacy localStorage data to IndexedDB...");
+              raw = legacyRaw;
+              try {
+                const writeTx = db.transaction('store', 'readwrite');
+                const writeStore = writeTx.objectStore('store');
+                writeStore.put(legacyRaw, name);
+              } catch (err) {
+                console.error("Migration write failed", err);
+              }
+            }
+          }
+          if (!raw) {
+            resolve(null);
+            return;
+          }
+          resolve(parseState(raw));
         };
-      }
-      localStorage.setItem(name, JSON.stringify(stateToSave));
+        request.onerror = () => {
+          const legacyRaw = localStorage.getItem(name);
+          resolve(legacyRaw ? parseState(legacyRaw) : null);
+        };
+      });
     } catch (e) {
-      console.error('Error saving state to localStorage:', e);
-      if (e.name === 'QuotaExceededError' || e.code === 22 || e.number === 0x8007000E) {
-        alert("⚠️ Local Storage is Full! The note could not be saved because the images or content exceed the browser's storage limit. We have added image compression to help prevent this, but please try using smaller images.");
+      console.error("IndexedDB failed, falling back to localStorage", e);
+      const raw = localStorage.getItem(name);
+      return raw ? parseState(raw) : null;
+    }
+  },
+
+  setItem: async (name, value) => {
+    const serialized = serializeState(value);
+
+    if (!useIndexedDB) {
+      try {
+        localStorage.setItem(name, serialized);
+      } catch (e) {
+        showQuotaAlert(e);
+      }
+      return;
+    }
+
+    try {
+      const db = await openDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction('store', 'readwrite');
+        const store = tx.objectStore('store');
+        const request = store.put(serialized, name);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.error("IndexedDB setItem failed, falling back to localStorage", e);
+      try {
+        localStorage.setItem(name, serialized);
+      } catch (err) {
+        showQuotaAlert(err);
       }
     }
   },
-  removeItem: (name) => localStorage.removeItem(name),
+
+  removeItem: async (name) => {
+    localStorage.removeItem(name);
+    if (!useIndexedDB) return;
+
+    try {
+      const db = await openDB();
+      return new Promise((resolve) => {
+        const tx = db.transaction('store', 'readwrite');
+        const store = tx.objectStore('store');
+        const request = store.delete(name);
+        request.onsuccess = () => resolve();
+        request.onerror = () => resolve();
+      });
+    } catch (e) {
+      console.error("IndexedDB removeItem failed", e);
+    }
+  }
 };
 
 export const useStore = create(

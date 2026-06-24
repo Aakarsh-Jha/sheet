@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { useStore } from './store/useStore';
 import sheetData from './data/sheetData';
+import { compressImage } from './utils/image';
 
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -32,6 +33,47 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
   }, [theme]);
+
+  // On startup, find and automatically compress any uncompressed legacy images in existing notes to free up space
+  useEffect(() => {
+    const optimizeExistingNotes = async () => {
+      const { notes, setNote } = useStore.getState();
+      let updatedAny = false;
+
+      for (const [questionId, content] of notes.entries()) {
+        // Look for raw uncompressed PNG base64 images in saved HTML notes
+        if (content.includes('data:image/png;base64,')) {
+          const tempDiv = document.createElement('div');
+          tempDiv.innerHTML = content;
+          const imgs = tempDiv.getElementsByTagName('img');
+          let noteUpdated = false;
+
+          for (let img of imgs) {
+            if (img.src.startsWith('data:image/png;base64,')) {
+              try {
+                const compressed = await compressImage(img.src);
+                img.src = compressed;
+                noteUpdated = true;
+              } catch (err) {
+                console.error('Failed to compress legacy note image', err);
+              }
+            }
+          }
+
+          if (noteUpdated) {
+            setNote(questionId, tempDiv.innerHTML);
+            updatedAny = true;
+          }
+        }
+      }
+
+      if (updatedAny) {
+        console.log('Successfully optimized and compressed legacy notes in localStorage!');
+      }
+    };
+
+    optimizeExistingNotes();
+  }, []);
 
   // Check if there are any revision questions matches in sheetData
   const hasRevisionQuestions = sheetData.some((step) => {
